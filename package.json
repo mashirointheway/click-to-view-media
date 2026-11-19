@@ -1,6 +1,6 @@
 {
   "name": "click-to-view-media",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "private": true,
   "description": "Blur images and videos until clicked, with YouTube ad mute/skip. Chrome and Firefox for Android builds.",
   "scripts": {

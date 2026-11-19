@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Click to View Media",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Hides images (including CSS backgrounds) and videos until you click to reveal them, and silences/skips YouTube ads.",
   "permissions": ["storage"],
   "host_permissions": ["<all_urls>"],

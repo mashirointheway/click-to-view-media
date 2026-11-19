@@ -22,6 +22,26 @@
     '[alt*="emoji" i]'
   ].join(", ");
 
+  // Controls whose clicks should still reach the page once their media is
+  // revealed, so an image used as a button can actually be used.
+  const INTERACTIVE_SELECTOR = [
+    "a[href]",
+    "button",
+    "input",
+    "select",
+    "textarea",
+    "summary",
+    "label",
+    '[role="button"]',
+    '[role="link"]',
+    '[role="menuitem"]',
+    '[role="checkbox"]',
+    '[role="radio"]',
+    '[role="switch"]',
+    '[role="tab"]',
+    "[onclick]"
+  ].join(", ");
+
   const BG_CANDIDATE_SELECTOR = [
     '[style*="background-image"]',
     '[data-testid*="avatar" i]',
@@ -636,10 +656,30 @@
     hide(el);
   }
 
+  function findInteractive(start) {
+    let el = start instanceof Element ? start : (start && start.parentElement);
+    while (el) {
+      if (el.matches && el.matches(INTERACTIVE_SELECTOR)) return el;
+      if (el.parentElement) {
+        el = el.parentElement;
+      } else {
+        const root = el.getRootNode ? el.getRootNode() : null;
+        el = root && root.host ? root.host : null;
+      }
+    }
+    return null;
+  }
+
   function handleMediaClick(event) {
     if (disabled) return;
     const toggled = findTogglable(event.target);
     if (!toggled) return;
+
+    // The first click on a blurred item only reveals it. After that, an item
+    // that is part of a button or link hands the click to the page instead of
+    // hiding itself again, otherwise the control could never be activated.
+    if (!toggled.reveal && findInteractive(event.target)) return;
+
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();

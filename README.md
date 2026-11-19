@@ -90,12 +90,12 @@ Then, in Firefox on the phone:
 ## Usage
 
 - **Reveal:** click or tap a blurred image or video. Only that item is revealed.
-- **Hide:** click or tap the revealed item again. It returns to its original blur.
+- **Hide:** click or tap the revealed item again. It returns to its original blur. Media inside a button or link is the exception: once revealed, the next click goes to the control so it can be used.
 - **Blur amount:** open the toolbar popup (Chrome) or the Extensions menu (Firefox Android) and move the slider. Changes apply immediately to open pages.
 - **Per-address off switch:** open the popup and choose **Disable on this site**. Blur and YouTube ad handling stop on that address immediately; choose **Enable on this site** to restore them. The exception is saved per address (host, including port).
 - **YouTube:** ad audio is muted automatically while an ad is playing, previous volume is restored when it ends, and the Skip button is clicked when available.
 
-Because the toggle consumes the click, a revealed image wrapped in a link will re-blur instead of navigating. This is intentional: the extension is a privacy toggle, not a link opener.
+The first click on a blurred image is always used to reveal it, even when the image is wrapped in a button or link. Once it is revealed, the next click reaches the control, so image buttons and linked thumbnails still work. A revealed image that is not part of a control hides again instead.
 
 ---
 
@@ -153,6 +153,6 @@ YouTube ad handling is best-effort and depends on YouTube's current player marku
 
 ## Version
 
-**1.5.0** — Chrome MV3 · Firefox for Android Beta 142+ · local-only Firefox build.
+**1.5.1** — Chrome MV3 · Firefox for Android Beta 142+ · local-only Firefox build.
 
 Not affiliated with YouTube or Google.
