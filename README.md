@@ -10,8 +10,8 @@ Click to View Media treats every page like someone is reading over your shoulder
 
 Built for Chrome and Firefox for Android Beta. Everything runs locally: no account, no server, no telemetry.
 
-- **Landing page:** https://mashirointhew.github.io/click-to-view-media/
-- **Source:** https://github.com/mashiroiNtheW/click-to-view-media
+- **Landing page:** https://mashirointheway.github.io/click-to-view-media/
+- **Source:** https://github.com/mashirointheway/click-to-view-media
 
 ---
 
@@ -32,7 +32,7 @@ Built for Chrome and Firefox for Android Beta. Everything runs locally: no accou
 ## Install on Chrome
 
 1. Download the repository ZIP:
-   https://github.com/mashiroiNtheW/click-to-view-media/archive/refs/heads/main.zip
+   https://github.com/mashirointheway/click-to-view-media/archive/refs/heads/main.zip
 2. Unzip it somewhere permanent — Chrome reads the extension from that folder.
 3. Open `chrome://extensions` and turn on **Developer mode**.
 4. Click **Load unpacked** and select the folder that contains `manifest.json`.
