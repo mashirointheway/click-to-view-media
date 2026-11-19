@@ -7,6 +7,8 @@
   const slider = document.getElementById("blur");
   const valueLabel = document.getElementById("blur-value");
   const resetButton = document.getElementById("reset");
+  const siteToggle = document.getElementById("site-toggle");
+  const siteHint = document.getElementById("site-hint");
   let saveTimer = null;
 
   const isFirefoxApi = typeof browser !== "undefined" && !!browser.runtime;
@@ -67,7 +69,76 @@
     storageSet({ blurPx: normalizeBlurPx(value) });
   }
 
-  storageGet({ blurPx: DEFAULT_BLUR_PX }).then(data => render(data.blurPx));
+  let disabledHosts = [];
+  let siteKey = "";
+
+  // Matches SITE_KEY in content.js: host (hostname plus port) for web pages,
+  // the protocol for anything without a host such as file:// URLs.
+  function siteKeyFromUrl(url) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "file:") {
+        return parsed.host || parsed.protocol;
+      }
+    } catch (_) {}
+    return "";
+  }
+
+  function renderSite() {
+    const disabledHere = !!siteKey && disabledHosts.includes(siteKey);
+    siteToggle.disabled = !siteKey;
+    siteToggle.setAttribute("aria-pressed", String(disabledHere));
+    siteToggle.textContent = !siteKey
+      ? "Not available on this page"
+      : (disabledHere ? "Enable on this site" : "Disable on this site");
+    siteHint.textContent = !siteKey
+      ? "Open a web page to use this setting."
+      : (disabledHere ? `Blur is off on ${siteKey}.` : `Blur is on for ${siteKey}.`);
+  }
+
+  function getActiveTab() {
+    if (!extensionApi || !extensionApi.tabs) return Promise.resolve(null);
+    return new Promise(resolve => {
+      try {
+        if (isFirefoxApi) {
+          extensionApi.tabs.query({ active: true, currentWindow: true })
+            .then(tabs => resolve((tabs && tabs[0]) || null), () => resolve(null));
+        } else {
+          extensionApi.tabs.query({ active: true, currentWindow: true }, tabs => {
+            // Reading lastError keeps Chrome from logging an unchecked error
+            // when the active page is not accessible (for example chrome://).
+            if (extensionApi.runtime && extensionApi.runtime.lastError) {
+              resolve(null);
+              return;
+            }
+            resolve((tabs && tabs[0]) || null);
+          });
+        }
+      } catch (_) {
+        resolve(null);
+      }
+    });
+  }
+
+  storageGet({ blurPx: DEFAULT_BLUR_PX, disabledHosts: [] }).then(data => {
+    render(data.blurPx);
+    disabledHosts = Array.isArray(data.disabledHosts) ? data.disabledHosts.slice() : [];
+    renderSite();
+  });
+
+  getActiveTab().then(tab => {
+    siteKey = tab && tab.url ? siteKeyFromUrl(tab.url) : "";
+    renderSite();
+  });
+
+  siteToggle.addEventListener("click", () => {
+    if (!siteKey) return;
+    disabledHosts = disabledHosts.includes(siteKey)
+      ? disabledHosts.filter(host => host !== siteKey)
+      : disabledHosts.concat(siteKey);
+    storageSet({ disabledHosts });
+    renderSite();
+  });
 
   slider.addEventListener("input", () => {
     const px = normalizeBlurPx(slider.value);

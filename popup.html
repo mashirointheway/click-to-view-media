@@ -75,6 +75,21 @@
 
     button:active { transform: translateY(1px); }
 
+    button:disabled {
+      opacity: .55;
+      cursor: default;
+    }
+
+    button:disabled:active { transform: none; }
+
+    .site {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }
+
+    .site .hint { margin-bottom: 0; }
+
     /* Firefox for Android opens the action popup as a full-screen overlay. */
     @media (min-width: 300px) {
       html { min-height: 100%; }
@@ -137,6 +152,11 @@
   <p class="hint">Minimum is 18px. Higher values hide more detail.</p>
 
   <button id="reset" type="button">Reset to 18px</button>
+
+  <div class="site">
+    <button id="site-toggle" type="button" disabled>Disable on this site</button>
+    <p class="hint" id="site-hint">Checking this page&hellip;</p>
+  </div>
 
   <script src="popup.js"></script>
 </body>

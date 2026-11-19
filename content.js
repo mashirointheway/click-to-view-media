@@ -6,6 +6,9 @@
   const REVEALED = "data-click-to-view-revealed";
   const BG_MARK = "data-click-to-view-bg";
 
+  // Per-address off switch. The popup writes the same list of hosts to storage.
+  const SITE_KEY = location.host || location.protocol;
+
   const MEDIA_SELECTOR = "img, video, input[type='image'], image";
   const BG_TAGS = new Set([
     "div", "span", "header", "section", "article", "li", "td", "th", "figure"
@@ -40,6 +43,8 @@
   const DEFAULT_BLUR_PX = 18;
   const MIN_BLUR_PX = 18;
   const MAX_BLUR_PX = 100;
+
+  let disabled = false;
 
   const style = document.createElement("style");
   style.id = STYLE_ID;
@@ -111,13 +116,23 @@
   function storageOnChanged(callback) {
     if (!extensionApi || !extensionApi.storage || !extensionApi.storage.onChanged) return;
     extensionApi.storage.onChanged.addListener((changes, area) => {
-      if (area === storageAreaName && changes.blurPx) callback(changes.blurPx.newValue);
+      if (area === storageAreaName) callback(changes);
     });
   }
 
+  function isSiteDisabled(list) {
+    return Array.isArray(list) && list.includes(SITE_KEY);
+  }
+
   applyBlurPx(DEFAULT_BLUR_PX);
-  storageGet({ blurPx: DEFAULT_BLUR_PX }).then(data => applyBlurPx(data.blurPx));
-  storageOnChanged(applyBlurPx);
+  storageGet({ blurPx: DEFAULT_BLUR_PX, disabledHosts: [] }).then(data => {
+    applyBlurPx(data.blurPx);
+    setDisabled(isSiteDisabled(data.disabledHosts));
+  });
+  storageOnChanged(changes => {
+    if (changes.blurPx) applyBlurPx(changes.blurPx.newValue);
+    if (changes.disabledHosts) setDisabled(isSiteDisabled(changes.disabledHosts.newValue));
+  });
 
   function isMediaElement(el) {
     const tag = el.localName;
@@ -192,7 +207,49 @@
       el.style.getPropertyValue("transition") === "none";
   }
 
+  function restoreTitle(el) {
+    if (!savedTitles.has(el)) {
+      el.removeAttribute("title");
+      return;
+    }
+    const title = savedTitles.get(el);
+    savedTitles.delete(el);
+    if (title === null) el.removeAttribute("title");
+    else el.setAttribute("title", title);
+  }
+
+  // Lift the blur from everything we hid, without marking it as revealed, so
+  // turning the site back on blurs it again.
+  function resetElement(el) {
+    el.removeAttribute(MARK);
+    el.removeAttribute(BG_MARK);
+    restoreTitle(el);
+    restoreHiddenStyle(el);
+  }
+
+  let stopAdHandling = null;
+
+  function setDisabled(value) {
+    const next = Boolean(value);
+    if (next === disabled) return;
+    disabled = next;
+
+    if (disabled) {
+      for (const root of knownRoots) {
+        if (root !== document && !root.isConnected) {
+          knownRoots.delete(root);
+          continue;
+        }
+        root.querySelectorAll(`[${MARK}="hidden"]`).forEach(resetElement);
+      }
+      if (stopAdHandling) stopAdHandling();
+    } else {
+      scan(document);
+    }
+  }
+
   function hide(el) {
+    if (disabled) return;
     if (!(el instanceof Element) || el.hasAttribute(REVEALED)) return;
 
     if (el.hasAttribute(MARK)) {
@@ -325,9 +382,14 @@
 
   const observer = new MutationObserver(handleRecords);
 
+  // Every root we have marked media in, so a site-wide disable can reach media
+  // inside shadow roots too.
+  const knownRoots = new Set([document]);
+
   function observeRoot(root) {
     if (!root || root.__clickToViewObserved) return;
     root.__clickToViewObserved = true;
+    knownRoots.add(root);
     try {
       observer.observe(root, {
         subtree: true,
@@ -442,6 +504,13 @@
       try { video.volume = saved.volume; } catch (_) {}
     }
 
+    // Called when the address is disabled while an ad is already muted.
+    stopAdHandling = function () {
+      if (!adActive) return;
+      adActive = false;
+      restoreAudio(getMainVideo(getPlayer()));
+    };
+
     function findSkipButton(player) {
       const roots = [player, document].filter(Boolean);
       for (const root of roots) {
@@ -488,6 +557,10 @@
     }
 
     function tick() {
+      if (disabled) {
+        if (stopAdHandling) stopAdHandling();
+        return;
+      }
       const player = getPlayer();
       if (!player) return;
       ensurePlayerObserver(player);
@@ -550,14 +623,7 @@
     el.setAttribute(REVEALED, "true");
     el.removeAttribute(MARK);
     el.removeAttribute(BG_MARK);
-    if (savedTitles.has(el)) {
-      const title = savedTitles.get(el);
-      savedTitles.delete(el);
-      if (title === null) el.removeAttribute("title");
-      else el.setAttribute("title", title);
-    } else {
-      el.removeAttribute("title");
-    }
+    restoreTitle(el);
     restoreHiddenStyle(el);
     if (el.localName === "video") {
       el.controls = true;
@@ -571,6 +637,7 @@
   }
 
   function handleMediaClick(event) {
+    if (disabled) return;
     const toggled = findTogglable(event.target);
     if (!toggled) return;
     event.preventDefault();

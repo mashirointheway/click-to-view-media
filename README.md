@@ -21,10 +21,11 @@ Built for Chrome and Firefox for Android Beta. Everything runs locally: no accou
 |---|---|
 | **Per-item toggle** | Every image and video is independent. Revealing one never reveals the rest of the page. Click the same item again to blur it. |
 | **Adjustable blur** | Set blur from **18px to 100px** in the popup. The value is saved and applied to media already on the page. |
+| **Per-address off switch** | Turn blur off for the current address from the popup — YouTube muting and skipping stop there too. The choice is remembered per site; every other site stays blurred. |
 | **Broad media coverage** | `<img>`, `<video>`, `<input type="image">`, SVG `<image>`, chat emotes and emoji (including CSS-background emotes), and heuristic CSS `background-image` elements such as avatars, banners, thumbnails, and `role="img"`. |
 | **Dynamic pages** | Lazy-loaded media, single-page navigation, and open shadow roots are picked up as they appear. New media is blurred in the same tick it is inserted, so it never flashes unblurred; heavier background scans are batched with `requestAnimationFrame`. |
 | **YouTube ads** | Ads are muted when they start, your previous mute/volume state is restored afterwards, and Skip is clicked as soon as it appears. Works on desktop YouTube and `m.youtube.com`. |
-| **Local by design** | No network calls and no data collection. The extension stores only your blur preference. |
+| **Local by design** | No network calls and no data collection. The extension stores only your blur preference and your per-site exceptions. |
 
 ---
 
@@ -56,18 +57,17 @@ This build is **not published or signed on AMO**. It installs temporarily over U
 ### Steps
 
 ```bash
-# 1. Install the build tools (once)
-npm install
-
-# 2. Build the Firefox version into dist/firefox
+# 1. Build the Firefox version into dist/firefox
 npm run build:firefox
 
-# 3. Confirm the phone is visible
+# 2. Confirm the phone is visible
 adb devices
 
-# 4. Install and launch the temporary add-on
+# 3. Install and launch the temporary add-on
 npm run run:android
 ```
+
+There is nothing to install first. Node.js 18+ is enough; the first `web-ext` command is fetched on demand by `npx` and cached for later runs.
 
 `run:android` targets `org.mozilla.firefox_beta` and keeps running in the terminal while you test. Leave it open.
 
@@ -92,6 +92,7 @@ Then, in Firefox on the phone:
 - **Reveal:** click or tap a blurred image or video. Only that item is revealed.
 - **Hide:** click or tap the revealed item again. It returns to its original blur.
 - **Blur amount:** open the toolbar popup (Chrome) or the Extensions menu (Firefox Android) and move the slider. Changes apply immediately to open pages.
+- **Per-address off switch:** open the popup and choose **Disable on this site**. Blur and YouTube ad handling stop on that address immediately; choose **Enable on this site** to restore them. The exception is saved per address (host, including port).
 - **YouTube:** ad audio is muted automatically while an ad is playing, previous volume is restored when it ends, and the Skip button is clicked when available.
 
 Because the toggle consumes the click, a revealed image wrapped in a link will re-blur instead of navigating. This is intentional: the extension is a privacy toggle, not a link opener.
@@ -101,13 +102,14 @@ Because the toggle consumes the click, a revealed image wrapped in a link will r
 ## Build, lint, and package
 
 ```bash
-npm install
 npm run build:firefox     # copy shared files + Firefox manifest into dist/firefox
 npm run lint:firefox      # web-ext lint (runs the build first)
 npm run package:firefox   # unsigned zip in web-ext-artifacts/
 npm run run:android       # build + install on Firefox Android Beta over USB
 npm run icons             # regenerate icons/icon-{16,32,48,128}.png
 ```
+
+`build:firefox` and `icons` use plain Node. The `web-ext` commands (`lint`, `package`, `run:android`) run through `npx` and are downloaded on first use, then cached by npm — no `npm install` or `node_modules` needed.
 
 ### Project structure
 
@@ -130,7 +132,7 @@ The Chrome and Firefox builds share the same `content.js`, `popup.html`, and `po
 
 ## Permissions & privacy
 
-- **`storage`** — saves the blur value only.
+- **`storage`** — saves the blur value and the list of addresses where blur is turned off.
 - **`<all_urls>` host permission** — required for the content script to blur media on any page you visit.
 - **No data collection.** `manifest.firefox.json` declares `browser_specific_settings.gecko.data_collection_permissions.required: ["none"]`.
 - **No network requests** are made by the extension. Nothing is sent anywhere.
@@ -151,6 +153,6 @@ YouTube ad handling is best-effort and depends on YouTube's current player marku
 
 ## Version
 
-**1.4.0** — Chrome MV3 · Firefox for Android Beta 142+ · local-only Firefox build.
+**1.5.0** — Chrome MV3 · Firefox for Android Beta 142+ · local-only Firefox build.
 
 Not affiliated with YouTube or Google.
