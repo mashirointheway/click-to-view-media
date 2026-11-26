@@ -1,13 +1,17 @@
 {
   "name": "click-to-view-media",
-  "version": "1.6.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Blur images and videos until clicked, with YouTube ad mute/skip. Chrome and Firefox for Android builds.",
   "scripts": {
     "icons": "node scripts/make-icons.mjs",
-    "build:firefox": "node scripts/build-firefox.mjs",
+    "build:firefox": "node scripts/check-versions.mjs && node scripts/build-firefox.mjs",
     "lint:firefox": "npm run build:firefox && npx --yes web-ext@10.8.0 lint --source-dir=dist/firefox",
     "package:firefox": "npm run build:firefox && npx --yes web-ext@10.8.0 build --source-dir=dist/firefox --artifacts-dir=web-ext-artifacts --overwrite-dest",
-    "run:android": "npm run build:firefox && npx --yes web-ext@10.8.0 run --source-dir=dist/firefox --target=firefox-android --firefox-apk=org.mozilla.firefox_beta"
+    "run:android": "npm run build:firefox && npx --yes web-ext@10.8.0 run --source-dir=dist/firefox --target=firefox-android --firefox-apk=org.mozilla.firefox_beta",
+    "version:sync": "node scripts/version-sync.mjs",
+    "check:versions": "node scripts/check-versions.mjs",
+    "test": "node --test test/shared.test.mjs test/structure.test.mjs && node scripts/check-versions.mjs",
+    "test:dom": "node test/dom.smoke.mjs"
   }
 }

@@ -1,10 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Click to View Media",
-  "version": "1.6.0",
+  "short_name": "ClickView",
+  "version": "2.0.0",
   "description": "Hides images (including CSS backgrounds) and videos until you click to reveal them, and silences/skips YouTube ads.",
+  "homepage_url": "https://mashirointheway.github.io/click-to-view-media/",
+  "minimum_chrome_version": "102",
   "permissions": ["storage"],
   "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -24,7 +30,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["src/shared.js", "src/media.js", "src/youtube.js"],
       "run_at": "document_start",
       "all_frames": true
     }

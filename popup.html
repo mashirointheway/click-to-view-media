@@ -90,6 +90,21 @@
 
     .site .hint { margin-bottom: 0; }
 
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    #site-enabled {
+      flex: none;
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
     /* Firefox for Android opens the action popup as a full-screen overlay. */
     @media (min-width: 300px) {
       html { min-height: 100%; }
@@ -111,6 +126,13 @@
       }
 
       label { margin-bottom: 10px; }
+
+      .switch-row { min-height: 44px; }
+
+      #site-enabled {
+        width: 26px;
+        height: 26px;
+      }
 
       input[type="range"] { height: 34px; }
 
@@ -146,18 +168,23 @@
 
   <label for="blur">Blur intensity</label>
   <div class="row">
-    <input id="blur" type="range" min="18" max="100" step="1" value="18">
-    <output id="blur-value" for="blur">18px</output>
+    <input id="blur" type="range">
+    <output id="blur-value" for="blur"></output>
   </div>
-  <p class="hint">Minimum is 18px. Higher values hide more detail.</p>
+  <p class="hint" id="blur-hint"></p>
+  <p class="hint" id="save-status" role="status" hidden></p>
 
-  <button id="reset" type="button">Reset to 18px</button>
+  <button id="reset" type="button"></button>
 
   <div class="site">
-    <button id="site-toggle" type="button" disabled>Disable on this site</button>
-    <p class="hint" id="site-hint">Checking this page&hellip;</p>
+    <label class="switch-row" for="site-enabled">
+      <span>Blur on this site</span>
+      <input id="site-enabled" type="checkbox" role="switch">
+    </label>
+    <p class="hint" id="site-hint" role="status">Checking this page&hellip;</p>
   </div>
 
-  <script src="popup.js"></script>
+  <script src="src/shared.js"></script>
+  <script src="src/popup.js"></script>
 </body>
 </html>
