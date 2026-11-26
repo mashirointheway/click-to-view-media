@@ -146,6 +146,7 @@
   // Appending the style to `document` at that point makes it the document
   // element and breaks the page, so wait for the real root instead.
   let mountAttempts = 0;
+  let savedBlurPx = config.DEFAULT_BLUR_PX;
   function mountStyle() {
     const root = document.documentElement;
     if (!root) {
@@ -153,6 +154,8 @@
       return;
     }
     if (!style.isConnected) root.appendChild(style);
+    // Re-apply blur; applyBlurPx may have no-op'd before documentElement existed.
+    applyBlurPx(savedBlurPx);
   }
   mountStyle();
 
@@ -187,6 +190,7 @@
 
   function applyBlurPx(value) {
     const px = CTV.normalizeBlurPx(value);
+    savedBlurPx = px;
     if (document.documentElement) {
       document.documentElement.style.setProperty("--click-to-view-blur", `${px}px`);
     }
@@ -333,6 +337,7 @@
     const state = hiddenState.get(el);
     el.removeAttribute(MARK);
     el.removeAttribute(BG_MARK);
+    el.removeAttribute(REVEALED);
     removeOverlay(el);
     unwatchOverlay(el);
     revealedByOverlay.delete(el);
@@ -417,20 +422,31 @@
   }
 
   function overlayContainerFor(el) {
-    let container = el.parentElement;
-    while (container && container !== document.documentElement) {
-      let display = "";
-      try {
-        display = getComputedStyle(container).display;
-      } catch (_) {}
-      if (display !== "contents") break;
-      container = container.parentElement;
-    }
+    // Skip ancestors that don't establish a containing block.
+    const skipContents = node => {
+      while (node && node !== document.documentElement) {
+        let display = "";
+        try {
+          display = getComputedStyle(node).display;
+        } catch (_) {}
+        if (display !== "contents") break;
+        node = node.parentElement;
+      }
+      return node;
+    };
+
+    let container = skipContents(el.parentElement);
     if (!container) return null;
     // Avoid nesting the button inside a control or a <picture>, which would be
-    // invalid markup and could steal the control's own click handling.
-    if (container.localName === "picture" || container.matches(INTERACTIVE_SELECTOR)) {
-      container = container.parentElement;
+    // invalid markup and could steal the control's own click handling. Keep
+    // unwrapping so e.g. <button><picture><img></picture></button> is skipped.
+    let guard = 0;
+    while (
+      container && container !== document.documentElement &&
+      (container.localName === "picture" || container.matches(INTERACTIVE_SELECTOR)) &&
+      guard++ < 50
+    ) {
+      container = skipContents(container.parentElement);
     }
     return container && container !== document ? container : null;
   }
@@ -453,7 +469,7 @@
       entry.changed = true;
       entry.position = container.style.getPropertyValue("position");
       entry.priority = container.style.getPropertyPriority("position");
-      container.style.setProperty("position", "relative");
+      container.style.setProperty("position", "relative", "important");
     }
     overlayContainers.set(container, entry);
     return entry;
@@ -463,6 +479,7 @@
     const entry = record.containerEntry;
     const container = record.container;
     if (!entry || !container) return;
+    record.containerEntry = null;
     entry.count--;
     if (entry.count > 0) return;
     overlayContainers.delete(container);
@@ -860,7 +877,7 @@
   // revealed media under the pointer and close to the clicked element, so a
   // click on a modal does not reach media behind it.
   function findRevealedAtPoint(event) {
-    if (!event.detail || !(event.target instanceof Element)) return null;
+    if (!(event.target instanceof Element)) return null;
     const target = event.target;
 
     const nearby = new Set();
@@ -880,6 +897,9 @@
       const rect = el.getBoundingClientRect();
       if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
       for (const node of nearby) {
+        // Never let a generic wrapper such as <body>/<html> count: they always
+        // contain the media, which would match a click on an unrelated layer.
+        if (node === document || node === document.body || node === document.documentElement) continue;
         if (node.contains(el)) return { el, reveal: false };
       }
     }
@@ -911,7 +931,11 @@
     // hiding itself again, otherwise the control could never be activated.
     // Media revealed with the overlay button always hides again, so the
     // button has a matching way to undo itself.
-    if (!toggled.reveal && !revealedByOverlay.has(toggled.el) && findInteractive(event.target)) return;
+    // ...unless the media *is* itself the interactive element (e.g. <input
+    // type="image">), in which case there is no separate control to hand the
+    // click to, so let it hide again.
+    const interactive = findInteractive(event.target);
+    if (!toggled.reveal && !revealedByOverlay.has(toggled.el) && interactive && interactive !== toggled.el) return;
 
     event.preventDefault();
     event.stopPropagation();
@@ -960,7 +984,7 @@
         knownRoots.delete(root);
         continue;
       }
-      root.querySelectorAll(`[${MARK}]`).forEach(resetElement);
+      root.querySelectorAll(`[${MARK}], [${REVEALED}]`).forEach(resetElement);
     }
     removeAllOverlays();
   }

@@ -36,16 +36,25 @@
   let adActive = false;
   let savedAudio = null;
   let lastSkipClick = 0;
+  let skipClicked = false;
   let playerObserver = null;
   let skipObserver = null;
   let watchedPlayer = null;
   let skipWatchedPlayer = null;
 
   function getPlayer() {
-    return document.querySelector(
+    const players = document.querySelectorAll(
       "#movie_player, .html5-video-player, ytm-player, " +
       "#player-container-id, #player-container, ytd-player"
     );
+    let first = null;
+    for (const player of players) {
+      if (!first) first = player;
+      // Prefer the player actually showing an ad (miniplayer, embeds, etc.).
+      if (player.classList.contains("ad-showing")) return player;
+      if (player.querySelector(".ad-showing")) return player;
+    }
+    return first || null;
   }
 
   function getMainVideo(player) {
@@ -56,8 +65,17 @@
 
   function isVisible(el) {
     if (!el) return false;
-    const computed = getComputedStyle(el);
-    if (computed.display === "none" || computed.visibility === "hidden" || computed.opacity === "0") return false;
+    // checkVisibility walks ancestors (display/visibility/opacity) for us.
+    if (typeof el.checkVisibility === "function") {
+      if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+    } else {
+      let node = el;
+      while (node && node.nodeType === 1) {
+        const computed = getComputedStyle(node);
+        if (computed.display === "none" || computed.visibility === "hidden" || computed.opacity === "0") return false;
+        node = node.parentElement;
+      }
+    }
     const rect = el.getBoundingClientRect();
     return rect.width > 1 && rect.height > 1;
   }
@@ -85,18 +103,23 @@
 
   function muteAd(video) {
     if (!video) return;
-    if (!savedAudio) savedAudio = { muted: video.muted, volume: video.volume };
+    // Capture the user's pre-ad audio state once, on the element we mute,
+    // so it can be restored on that same element afterwards.
+    if (!savedAudio) savedAudio = { video, muted: video.muted, volume: video.volume };
     try { video.muted = true; } catch (_) {}
     try { video.volume = 0; } catch (_) {}
   }
 
   function restoreAudio(video) {
-    if (!savedAudio) return;
     const saved = savedAudio;
+    if (!saved) return;
+    // Restore the element we actually muted; fall back to a current one.
+    const target = (saved.video && saved.video.isConnected) ? saved.video : video;
+    // Nothing to restore onto right now; keep savedAudio and retry later.
+    if (!target) return;
+    try { target.muted = saved.muted; } catch (_) {}
+    try { target.volume = saved.volume; } catch (_) {}
     savedAudio = null;
-    if (!video) return;
-    try { video.muted = saved.muted; } catch (_) {}
-    try { video.volume = saved.volume; } catch (_) {}
   }
 
   // Called when the address is disabled while an ad is already muted, or on
@@ -149,12 +172,15 @@
     if (!adActive) return;
     const now = Date.now();
     if (now - lastSkipClick < 500) return;
+    // Click the skip button once per ad instead of hammering it.
+    if (skipClicked) return;
     // Throttle the search itself, not only the click: while an ad is showing,
     // the player subtree mutates constantly and finding no button must not
     // trigger a full query on every mutation.
     lastSkipClick = now;
     const button = findSkipButton(player);
     if (!button) return;
+    skipClicked = true;
     try { button.click(); } catch (_) {}
   }
 
@@ -203,11 +229,14 @@
       if (!adActive) {
         adActive = true;
         lastSkipClick = 0;
+        skipClicked = false;
       }
       muteAd(video);
       clickSkip(player);
       ensureSkipObserver(player);
-    } else if (adActive) {
+    } else if (adActive || savedAudio) {
+      // Restore user audio; if there is nothing to restore onto yet,
+      // savedAudio is kept and retried on a later tick.
       adActive = false;
       restoreAudio(video);
       // No ad: stop watching insertions until the next ad starts.
@@ -232,13 +261,18 @@
     document.addEventListener("play", event => {
       tick();
       if (!adActive) return;
-      const video = getMainVideo(getPlayer());
-      if (event.target === video && (!video.muted || video.volume !== 0)) muteAd(video);
+      const video = event.target;
+      if (!video) return;
+      // Only re-mute the element we're muting, never an unrelated player.
+      if (savedAudio && savedAudio.video && savedAudio.video !== video) return;
+      if (!video.muted || video.volume !== 0) muteAd(video);
     }, true);
     document.addEventListener("volumechange", event => {
       if (!adActive) return;
-      const video = getMainVideo(getPlayer());
-      if (event.target === video && (!video.muted || video.volume !== 0)) muteAd(video);
+      const video = event.target;
+      if (!video) return;
+      if (savedAudio && savedAudio.video && savedAudio.video !== video) return;
+      if (!video.muted || video.volume !== 0) muteAd(video);
     }, true);
 
     // Safety net only: 2 s instead of the old 150 ms poll, and idle while the
