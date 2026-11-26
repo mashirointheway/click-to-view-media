@@ -5,9 +5,24 @@
   const STYLE_ID = "click-to-view-media-style";
   const REVEALED = "data-click-to-view-revealed";
   const BG_MARK = "data-click-to-view-bg";
+  const OVERLAY_ATTR = "data-click-to-view-overlay";
+
+  // Large media gets a translucent "Click to view" button on top. Pages such as
+  // Instagram posts with tagged accounts paint their own controls over the
+  // media, so a click never reaches the blurred element itself.
+  const MIN_OVERLAY_SIDE_PX = 150;
 
   // Per-address off switch. The popup writes the same list of hosts to storage.
-  const SITE_KEY = location.host || location.protocol;
+  // SITE_KEY is per *page*, not per frame: with all_frames, every iframe shares
+  // the top page's key. Synchronous best-effort now; corrected async below.
+  let SITE_KEY = location.host || location.protocol;
+  (function () {
+    try {
+      if (window.top && window.top !== window && window.top.location) {
+        SITE_KEY = window.top.location.host || window.top.location.protocol || SITE_KEY;
+      }
+    } catch (_) { /* cross-origin; background relay below fills it in */ }
+  })();
 
   const MEDIA_SELECTOR = "img, video, input[type='image'], image";
   const BG_TAGS = new Set([
@@ -59,6 +74,9 @@
 
   const savedStyles = new WeakMap();
   const savedTitles = new WeakMap();
+  // Original <video> attributes we override while hiding, restored on reveal/reset.
+  const savedVideo = new WeakMap();
+  const revealedByOverlay = new Set();
 
   const DEFAULT_BLUR_PX = 18;
   const MIN_BLUR_PX = 18;
@@ -77,8 +95,61 @@
     }
     video[${MARK}="hidden"] { visibility: visible !important; }
     [${MARK}="hidden"]::selection { background: transparent; }
+    [${OVERLAY_ATTR}] {
+      position: absolute !important;
+      z-index: 2147483000 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      border: 1px solid rgba(255, 255, 255, .35) !important;
+      border-radius: 4px !important;
+      background: rgba(10, 12, 16, .16) !important;
+      color: #fff !important;
+      font: 600 13px/1.2 system-ui, -apple-system, "Segoe UI", sans-serif !important;
+      align-items: center !important;
+      justify-content: center !important;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
+      cursor: pointer !important;
+      pointer-events: auto !important;
+      appearance: none !important;
+      -webkit-appearance: none !important;
+      text-align: center !important;
+    }
+    [${OVERLAY_ATTR}] > span {
+      padding: 6px 12px !important;
+      border-radius: 999px !important;
+      background: rgba(0, 0, 0, .6) !important;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, .45) !important;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, .6) !important;
+      white-space: nowrap !important;
+      pointer-events: none !important;
+    }
+    [${OVERLAY_ATTR}]:focus-visible {
+      outline: 2px solid #fff !important;
+      outline-offset: -2px !important;
+    }
   `;
-  (document.documentElement || document).appendChild(style);
+  // Chrome 157+: at document_start document.documentElement is null, and
+  // appending the style to `document` then makes it the document element
+  // while the parser never creates the page's <html>/<body> — every page
+  // breaks. Wait for the parser to create the document element first. Never
+  // append to `document`; retry until a real document element exists.
+  let savedBlurPx = DEFAULT_BLUR_PX;
+  function appendStyle() {
+    if (!document.documentElement) {
+      document.addEventListener("DOMContentLoaded", appendStyle, { once: true });
+      return;
+    }
+    document.documentElement.appendChild(style);
+    // Re-apply the stored blur; at document_start applyBlurPx may have no-op'd
+    // because documentElement didn't exist yet.
+    applyBlurPx(savedBlurPx);
+  }
+  if (document.documentElement) {
+    appendStyle();
+  } else {
+    document.addEventListener("DOMContentLoaded", appendStyle, { once: true });
+  }
 
   function normalizeBlurPx(value) {
     const number = Number(value);
@@ -88,6 +159,7 @@
 
   function applyBlurPx(value) {
     const px = normalizeBlurPx(value);
+    savedBlurPx = px;
     if (document.documentElement) {
       document.documentElement.style.setProperty("--click-to-view-blur", `${px}px`);
     }
@@ -144,14 +216,40 @@
     return Array.isArray(list) && list.includes(SITE_KEY);
   }
 
+  // Resolve the top-page key from the background worker (covers cross-origin
+  // iframes whose own location can't see the parent). `disabledHosts` is
+  // re-read afterwards so keying is correct before we decide.
+  let siteKeyPromise = Promise.resolve();
+  if (extensionApi && extensionApi.runtime && extensionApi.runtime.sendMessage) {
+    siteKeyPromise = (async () => {
+      try {
+        const response = isFirefoxApi
+          ? await extensionApi.runtime.sendMessage({ type: "click-to-view-top-key" })
+          : await new Promise(resolve => {
+              try {
+                extensionApi.runtime.sendMessage({ type: "click-to-view-top-key" }, resp => {
+                  if (extensionApi.runtime.lastError) { resolve(null); return; }
+                  resolve(resp || null);
+                });
+              } catch (_) { resolve(null); }
+            });
+        if (response && response.key) SITE_KEY = response.key;
+      } catch (_) {}
+    })();
+  }
+
   applyBlurPx(DEFAULT_BLUR_PX);
-  storageGet({ blurPx: DEFAULT_BLUR_PX, disabledHosts: [] }).then(data => {
-    applyBlurPx(data.blurPx);
-    setDisabled(isSiteDisabled(data.disabledHosts));
-  });
+  siteKeyPromise.then(() =>
+    storageGet({ blurPx: DEFAULT_BLUR_PX, disabledHosts: [] }).then(data => {
+      applyBlurPx(data.blurPx);
+      setDisabled(isSiteDisabled(data.disabledHosts));
+    })
+  );
   storageOnChanged(changes => {
     if (changes.blurPx) applyBlurPx(changes.blurPx.newValue);
-    if (changes.disabledHosts) setDisabled(isSiteDisabled(changes.disabledHosts.newValue));
+    if (changes.disabledHosts) {
+      siteKeyPromise.then(() => setDisabled(isSiteDisabled(changes.disabledHosts.newValue)));
+    }
   });
 
   function isMediaElement(el) {
@@ -224,7 +322,8 @@
       el.style.getPropertyPriority("filter") === "important" &&
       el.style.getPropertyValue("opacity") === "0.12" &&
       el.style.getPropertyPriority("opacity") === "important" &&
-      el.style.getPropertyValue("transition") === "none";
+      el.style.getPropertyValue("transition") === "none" &&
+      el.style.getPropertyPriority("transition") === "important";
   }
 
   function restoreTitle(el) {
@@ -238,13 +337,40 @@
     else el.setAttribute("title", title);
   }
 
+  // Snapshot and restore the <video> attributes we override while hiding.
+  function saveVideoState(el) {
+    if (el.localName !== "video" || savedVideo.has(el)) return;
+    savedVideo.set(el, {
+      autoplay: el.autoplay,
+      autoplayAttr: el.getAttribute("autoplay"),
+      preload: el.getAttribute("preload"),
+      controls: el.controls
+    });
+  }
+
+  function restoreVideoState(el) {
+    const saved = savedVideo.get(el);
+    if (!saved) return;
+    savedVideo.delete(el);
+    try { el.autoplay = saved.autoplay; } catch (_) {}
+    if (saved.autoplayAttr === null) el.removeAttribute("autoplay");
+    else el.setAttribute("autoplay", saved.autoplayAttr);
+    if (saved.preload === null) el.removeAttribute("preload");
+    else el.setAttribute("preload", saved.preload);
+    try { el.controls = saved.controls; } catch (_) {}
+  }
+
   // Lift the blur from everything we hid, without marking it as revealed, so
   // turning the site back on blurs it again.
   function resetElement(el) {
     el.removeAttribute(MARK);
     el.removeAttribute(BG_MARK);
+    el.removeAttribute(REVEALED);
+    removeOverlay(el);
+    revealedByOverlay.delete(el);
     restoreTitle(el);
     restoreHiddenStyle(el);
+    restoreVideoState(el);
   }
 
   let stopAdHandling = null;
@@ -260,9 +386,10 @@
           knownRoots.delete(root);
           continue;
         }
-        root.querySelectorAll(`[${MARK}="hidden"]`).forEach(resetElement);
+        root.querySelectorAll(`[${MARK}="hidden"], [${REVEALED}]`).forEach(resetElement);
       }
       if (stopAdHandling) stopAdHandling();
+      removeAllOverlays();
     } else {
       scan(document);
     }
@@ -277,6 +404,7 @@
       if ((isMediaElement(el) || el.hasAttribute(BG_MARK)) && !hiddenStyleIsApplied(el)) {
         applyHiddenStyle(el);
       }
+      scheduleOverlay(el);
       return;
     }
 
@@ -291,11 +419,14 @@
 
     // Stop videos from playing before the user reveals them.
     if (el.localName === "video") {
+      saveVideoState(el);
       try { el.pause(); } catch (_) {}
       el.autoplay = false;
       el.removeAttribute("autoplay");
       el.preload = "none";
     }
+
+    scheduleOverlay(el);
   }
 
   function scan(root, includeShadowRoots = true) {
@@ -367,6 +498,271 @@
     });
   }
 
+  // ---- Click-to-view buttons for large media --------------------------------
+  // The button lives in the page's own stacking context, over the media, so a
+  // modal or any other page layer correctly covers it. It sits above the
+  // media's siblings, which keeps it clickable when a site (Instagram posts
+  // with tagged accounts, for example) paints its own controls on top.
+  let overlaySyncFrame = 0;
+  const overlayRecords = new Map();
+  const pendingOverlayMedia = new Set();
+  const overlayContainers = new Map();
+  const overlayMediaByButton = new WeakMap();
+  const overlayResizeObserver = typeof ResizeObserver === "function"
+    ? new ResizeObserver(entries => {
+        for (const entry of entries) {
+          const record = overlayRecords.get(entry.target);
+          if (record) { positionOverlay(record); continue; }
+          // A container resize/layout shift can move the media within it;
+          // re-position every overlay rather than tracking which one.
+          for (const [, record] of overlayRecords) positionOverlay(record);
+          break;
+        }
+      })
+    : null;
+
+  // Re-position overlays on window resize and any scrolling (capture, since
+  // scroll doesn't bubble), batched to a frame.
+  let overlayRepositionFrame = 0;
+  function scheduleOverlayReposition() {
+    if (overlayRepositionFrame) return;
+    overlayRepositionFrame = requestFrame(() => {
+      overlayRepositionFrame = 0;
+      for (const [, record] of overlayRecords) positionOverlay(record);
+    });
+  }
+  window.addEventListener("resize", scheduleOverlayReposition, { passive: true });
+  window.addEventListener("scroll", scheduleOverlayReposition, { passive: true, capture: true });
+
+  function isOverlayableElement(el) {
+    const tag = el.localName;
+    return tag === "img" || tag === "video" ||
+      (tag === "input" && el.type === "image") ||
+      el.hasAttribute(BG_MARK);
+  }
+
+  function overlayContainerFor(el) {
+    // Skip ancestors that don't establish a containing block.
+    const skipContents = node => {
+      while (node && node !== document.documentElement) {
+        let display = "";
+        try {
+          display = getComputedStyle(node).display;
+        } catch (_) {}
+        if (display !== "contents") break;
+        node = node.parentElement;
+      }
+      return node;
+    };
+
+    let container = skipContents(el.parentElement);
+    if (!container) return null;
+    // Avoid nesting the button inside a control or a <picture>, which would be
+    // invalid markup and could steal the control's own click handling. Keep
+    // unwrapping so e.g. <button><picture><img></picture></button> is skipped.
+    let guard = 0;
+    while (
+      container && container !== document.documentElement &&
+      (container.localName === "picture" || container.matches(INTERACTIVE_SELECTOR)) &&
+      guard++ < 50
+    ) {
+      container = skipContents(container.parentElement);
+    }
+    return container && container !== document ? container : null;
+  }
+
+  function acquireOverlayContainer(container) {
+    let entry = overlayContainers.get(container);
+    if (entry) {
+      entry.count++;
+      return entry;
+    }
+    entry = { count: 1, changed: false, position: "", priority: "" };
+    let computed = null;
+    try {
+      computed = getComputedStyle(container);
+    } catch (_) {}
+    if (computed && computed.position === "static") {
+      entry.changed = true;
+      entry.position = container.style.getPropertyValue("position");
+      entry.priority = container.style.getPropertyPriority("position");
+      container.style.setProperty("position", "relative", "important");
+    }
+    overlayContainers.set(container, entry);
+    return entry;
+  }
+
+  function releaseOverlayContainer(record) {
+    const entry = record.containerEntry;
+    const container = record.container;
+    if (!entry || !container) return;
+    record.containerEntry = null;
+    entry.count--;
+    if (entry.count > 0) return;
+    overlayContainers.delete(container);
+    if (overlayResizeObserver) {
+      try { overlayResizeObserver.unobserve(container); } catch (_) {}
+    }
+    if (entry.changed) {
+      if (entry.position) container.style.setProperty("position", entry.position, entry.priority);
+      else container.style.removeProperty("position");
+    }
+  }
+
+  function shouldShowOverlay(el) {
+    if (disabled || !el.isConnected) return false;
+    if (el.hasAttribute(REVEALED) || el.getAttribute(MARK) !== "hidden") return false;
+    if (!isOverlayableElement(el)) return false;
+    const rect = el.getBoundingClientRect();
+    // A zero-sized rect usually means the media has not been laid out yet.
+    // Keep a button ready so it can appear as soon as the media has a size.
+    if (rect.width === 0 || rect.height === 0) return true;
+    return rect.width >= MIN_OVERLAY_SIDE_PX && rect.height >= MIN_OVERLAY_SIDE_PX;
+  }
+
+  function positionOverlay(record) {
+    const media = record.media;
+    const container = record.container;
+    const button = record.button;
+    if (!media.isConnected || !container || !container.isConnected) {
+      button.style.display = "none";
+      return;
+    }
+    const rect = media.getBoundingClientRect();
+    if (rect.width < MIN_OVERLAY_SIDE_PX || rect.height < MIN_OVERLAY_SIDE_PX) {
+      button.style.display = "none";
+      return;
+    }
+
+    let computed = null;
+    try {
+      computed = getComputedStyle(container);
+    } catch (_) {}
+    const containerRect = container.getBoundingClientRect();
+    const borderLeft = computed ? parseFloat(computed.borderLeftWidth) || 0 : 0;
+    const borderTop = computed ? parseFloat(computed.borderTopWidth) || 0 : 0;
+    // Absolutely positioned children are placed from the padding box before
+    // the container's own scroll offset.
+    const scrollLeft = container === document.documentElement ? 0 : container.scrollLeft;
+    const scrollTop = container === document.documentElement ? 0 : container.scrollTop;
+
+    button.style.display = "flex";
+    button.style.left = `${rect.left - containerRect.left - borderLeft + scrollLeft}px`;
+    button.style.top = `${rect.top - containerRect.top - borderTop + scrollTop}px`;
+    button.style.width = `${rect.width}px`;
+    button.style.height = `${rect.height}px`;
+  }
+
+  function createOverlay(media) {
+    const container = overlayContainerFor(media);
+    if (!container) return null;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute(OVERLAY_ATTR, "");
+    button.setAttribute("aria-label", "Click to view media");
+    button.title = "Click to view this media";
+
+    const label = document.createElement("span");
+    label.textContent = "Click to view";
+    label.setAttribute("aria-hidden", "true");
+    button.appendChild(label);
+
+    const record = { media, button, container };
+    record.containerEntry = acquireOverlayContainer(container);
+    overlayMediaByButton.set(button, media);
+
+    overlayRecords.set(media, record);
+    if (overlayResizeObserver) {
+      overlayResizeObserver.observe(media);
+      overlayResizeObserver.observe(container);
+    }
+    container.appendChild(button);
+    positionOverlay(record);
+    return record;
+  }
+
+  function removeOverlay(el) {
+    const record = overlayRecords.get(el);
+    if (!record) return;
+    overlayRecords.delete(el);
+    pendingOverlayMedia.delete(el);
+    if (overlayResizeObserver) overlayResizeObserver.unobserve(el);
+    overlayMediaByButton.delete(record.button);
+    record.button.remove();
+    releaseOverlayContainer(record);
+  }
+
+  function removeAllOverlays() {
+    for (const [media, record] of overlayRecords) {
+      if (overlayResizeObserver) overlayResizeObserver.unobserve(media);
+      overlayMediaByButton.delete(record.button);
+      record.button.remove();
+      releaseOverlayContainer(record);
+    }
+    overlayRecords.clear();
+    pendingOverlayMedia.clear();
+  }
+
+  function syncOverlay(el) {
+    if (!shouldShowOverlay(el)) {
+      removeOverlay(el);
+      return;
+    }
+    const record = overlayRecords.get(el);
+    if (!record) {
+      createOverlay(el);
+    } else if (record.button.isConnected) {
+      positionOverlay(record);
+    } else {
+      record.container.appendChild(record.button);
+      positionOverlay(record);
+    }
+  }
+
+  // Site re-renders can replace the container, remove the button, or drop the
+  // media entirely. Repair or forget the overlay on the next sync pass.
+  function repairOverlays() {
+    for (const [media, record] of overlayRecords) {
+      if (!media.isConnected) {
+        removeOverlay(media);
+        continue;
+      }
+      if (record.container && record.container.isConnected && record.container.contains(media)) {
+        if (!record.button.isConnected) {
+          record.container.appendChild(record.button);
+          positionOverlay(record);
+        }
+        continue;
+      }
+      releaseOverlayContainer(record);
+      const container = overlayContainerFor(media);
+      if (!container) {
+        removeOverlay(media);
+        continue;
+      }
+      record.container = container;
+      record.containerEntry = acquireOverlayContainer(container);
+      if (overlayResizeObserver) {
+        try { overlayResizeObserver.observe(container); } catch (_) {}
+      }
+      container.appendChild(record.button);
+      positionOverlay(record);
+    }
+  }
+
+  function scheduleOverlay(el) {
+    pendingOverlayMedia.add(el);
+    if (overlaySyncFrame) return;
+    overlaySyncFrame = requestFrame(() => {
+      overlaySyncFrame = 0;
+      const media = Array.from(pendingOverlayMedia);
+      pendingOverlayMedia.clear();
+      for (const el of media) syncOverlay(el);
+      repairOverlays();
+    });
+  }
+
   function handleRecords(records) {
     for (const record of records) {
       if (record.type === "childList") {
@@ -381,6 +777,15 @@
           } else if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
             scheduleScan(node);
           }
+        });
+        record.removedNodes.forEach(node => {
+          if (node.nodeType !== Node.ELEMENT_NODE) return;
+          revealedByOverlay.delete(node);
+          if (overlayRecords.has(node)) removeOverlay(node);
+          node.querySelectorAll(`${MEDIA_SELECTOR}, [${BG_MARK}], [${MARK}], [${REVEALED}]`).forEach(el => {
+            revealedByOverlay.delete(el);
+            if (overlayRecords.has(el)) removeOverlay(el);
+          });
         });
       } else if (record.type === "attributes") {
         const el = record.target;
@@ -409,6 +814,9 @@
   function observeRoot(root) {
     if (!root || root.__clickToViewObserved) return;
     root.__clickToViewObserved = true;
+    for (const known of knownRoots) {
+      if (known !== document && !known.isConnected) knownRoots.delete(known);
+    }
     knownRoots.add(root);
     try {
       observer.observe(root, {
@@ -465,14 +873,23 @@
     let adActive = false;
     let savedAudio = null;
     let lastSkipClick = 0;
+    let skipClicked = false;
     let playerObserver = null;
     let watchedPlayer = null;
 
     function getPlayer() {
-      return document.querySelector(
+      const players = document.querySelectorAll(
         "#movie_player, .html5-video-player, ytm-player, " +
         "#player-container-id, #player-container, ytd-player"
       );
+      let first = null;
+      for (const player of players) {
+        if (!first) first = player;
+        // Prefer the player actually showing an ad (miniplayer, embeds, etc.).
+        if (player.classList.contains("ad-showing")) return player;
+        if (player.querySelector(".ad-showing")) return player;
+      }
+      return first || null;
     }
 
     function getMainVideo(player) {
@@ -483,8 +900,17 @@
 
     function isVisible(el) {
       if (!el) return false;
-      const computed = getComputedStyle(el);
-      if (computed.display === "none" || computed.visibility === "hidden" || computed.opacity === "0") return false;
+      // checkVisibility walks ancestors (display/visibility/opacity) for us.
+      if (typeof el.checkVisibility === "function") {
+        if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+      } else {
+        let node = el;
+        while (node && node.nodeType === 1) {
+          const computed = getComputedStyle(node);
+          if (computed.display === "none" || computed.visibility === "hidden" || computed.opacity === "0") return false;
+          node = node.parentElement;
+        }
+      }
       const rect = el.getBoundingClientRect();
       return rect.width > 1 && rect.height > 1;
     }
@@ -510,23 +936,29 @@
 
     function muteAd(video) {
       if (!video) return;
-      if (!savedAudio) savedAudio = { muted: video.muted, volume: video.volume };
+      // Capture the user's pre-ad audio state once, on the element we will
+      // mute, so it can be restored on that same element afterwards.
+      if (!savedAudio) savedAudio = { video, muted: video.muted, volume: video.volume };
       try { video.muted = true; } catch (_) {}
       try { video.volume = 0; } catch (_) {}
     }
 
     function restoreAudio(video) {
-      if (!savedAudio) return;
       const saved = savedAudio;
+      if (!saved) return;
+      // Restore the element we actually muted; fall back to a current one.
+      const target = (saved.video && saved.video.isConnected) ? saved.video : video;
+      // Nothing to restore onto right now. Keep savedAudio so a later tick or
+      // disable can retry instead of silently discarding the user's state.
+      if (!target) return;
+      try { target.muted = saved.muted; } catch (_) {}
+      try { target.volume = saved.volume; } catch (_) {}
       savedAudio = null;
-      if (!video) return;
-      try { video.muted = saved.muted; } catch (_) {}
-      try { video.volume = saved.volume; } catch (_) {}
     }
 
     // Called when the address is disabled while an ad is already muted.
     stopAdHandling = function () {
-      if (!adActive) return;
+      if (!adActive && !savedAudio) return;
       adActive = false;
       restoreAudio(getMainVideo(getPlayer()));
     };
@@ -559,11 +991,14 @@
 
     function clickSkip(player) {
       if (!adActive) return;
+      // Click the skip button once per ad instead of hammering it every tick.
+      if (skipClicked) return;
       const now = Date.now();
       if (now - lastSkipClick < 500) return;
       const button = findSkipButton(player);
       if (!button) return;
       lastSkipClick = now;
+      skipClicked = true;
       try { button.click(); } catch (_) {}
     }
 
@@ -591,10 +1026,13 @@
         if (!adActive) {
           adActive = true;
           lastSkipClick = 0;
+          skipClicked = false;
         }
         muteAd(video);
         clickSkip(player);
-      } else if (adActive) {
+      } else if (adActive || savedAudio) {
+        // Restore user audio; if there is nothing to restore onto yet,
+        // savedAudio is kept and retried on a later tick.
         adActive = false;
         restoreAudio(video);
       }
@@ -607,13 +1045,18 @@
       document.addEventListener("play", event => {
         tick();
         if (!adActive) return;
-        const video = getMainVideo(getPlayer());
-        if (event.target === video && (!video.muted || video.volume !== 0)) muteAd(video);
+        const video = event.target;
+        if (!video) return;
+        // Only re-mute the element we're muting, never an unrelated player.
+        if (savedAudio && savedAudio.video && savedAudio.video !== video) return;
+        if (!video.muted || video.volume !== 0) muteAd(video);
       }, true);
       document.addEventListener("volumechange", event => {
         if (!adActive) return;
-        const video = getMainVideo(getPlayer());
-        if (event.target === video && (!video.muted || video.volume !== 0)) muteAd(video);
+        const video = event.target;
+        if (!video) return;
+        if (savedAudio && savedAudio.video && savedAudio.video !== video) return;
+        if (!video.muted || video.volume !== 0) muteAd(video);
       }, true);
       setInterval(tick, 150);
     }
@@ -639,10 +1082,13 @@
     return null;
   }
 
-  function revealElement(el) {
+  function revealElement(el, fromOverlay = false) {
+    if (fromOverlay) revealedByOverlay.add(el);
+    else revealedByOverlay.delete(el);
     el.setAttribute(REVEALED, "true");
     el.removeAttribute(MARK);
     el.removeAttribute(BG_MARK);
+    removeOverlay(el);
     restoreTitle(el);
     restoreHiddenStyle(el);
     if (el.localName === "video") {
@@ -652,7 +1098,9 @@
   }
 
   function unrevealElement(el) {
+    revealedByOverlay.delete(el);
     el.removeAttribute(REVEALED);
+    restoreVideoState(el);
     hide(el);
   }
 
@@ -670,15 +1118,69 @@
     return null;
   }
 
+  // Some sites paint controls over the media (Instagram tag markers, for
+  // example), so the click lands on a sibling of the revealed image. Match the
+  // revealed media under the pointer and close to the clicked element, so a
+  // click on a modal does not reach media behind it.
+  function findRevealedAtPoint(event) {
+    if (!(event.target instanceof Element)) return null;
+    const target = event.target;
+
+    const nearby = new Set();
+    let ancestor = target;
+    for (let depth = 0; ancestor && depth <= 4; depth++) {
+      nearby.add(ancestor);
+      ancestor = ancestor.parentElement;
+    }
+
+    const x = event.clientX;
+    const y = event.clientY;
+    for (const el of revealedByOverlay) {
+      if (!el.isConnected) {
+        revealedByOverlay.delete(el);
+        continue;
+      }
+      const rect = el.getBoundingClientRect();
+      if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
+      for (const node of nearby) {
+        // Never let a generic wrapper such as <body>/<html> count: they always
+        // contain the media, which would match a click on an unrelated layer.
+        if (node === document || node === document.body || node === document.documentElement) continue;
+        if (node.contains(el)) return { el, reveal: false };
+      }
+    }
+    return null;
+  }
+
   function handleMediaClick(event) {
     if (disabled) return;
-    const toggled = findTogglable(event.target);
+
+    // The overlay button is handled in the capture phase so the page's own
+    // listeners never see the click (tag markers, post links, and so on).
+    const overlay = event.target instanceof Element
+      ? event.target.closest(`[${OVERLAY_ATTR}]`)
+      : null;
+    if (overlay) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      const media = overlayMediaByButton.get(overlay);
+      if (media && media.isConnected) revealElement(media, true);
+      return;
+    }
+
+    const toggled = findTogglable(event.target) || findRevealedAtPoint(event);
     if (!toggled) return;
 
     // The first click on a blurred item only reveals it. After that, an item
     // that is part of a button or link hands the click to the page instead of
     // hiding itself again, otherwise the control could never be activated.
-    if (!toggled.reveal && findInteractive(event.target)) return;
+    // Media revealed with the overlay button always hides again, so the
+    // button has a matching way to undo itself. The exception is media that
+    // *is* itself the interactive element (e.g. <input type="image">): there
+    // is no separate control to hand the click to, so let it hide again.
+    const interactive = findInteractive(event.target);
+    if (!toggled.reveal && !revealedByOverlay.has(toggled.el) && interactive && interactive !== toggled.el) return;
 
     event.preventDefault();
     event.stopPropagation();

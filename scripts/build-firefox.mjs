@@ -18,7 +18,7 @@ if (chromeManifest.version !== firefoxManifest.version) {
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 
-for (const file of ["content.js", "popup.html", "popup.js"]) {
+for (const file of ["content.js", "background.js", "popup.html", "popup.js"]) {
   cpSync(join(root, file), join(outDir, file));
 }
 cpSync(join(root, "icons"), join(outDir, "icons"), { recursive: true });

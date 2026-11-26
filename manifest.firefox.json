@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Click to View Media",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Hides images (including CSS backgrounds) and videos until you click to reveal them, and silences/skips YouTube ads.",
   "permissions": ["storage"],
   "host_permissions": ["<all_urls>"],
@@ -21,12 +21,15 @@
       "128": "icons/icon-128.png"
     }
   },
+  "background": { "scripts": ["background.js"] },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
       "run_at": "document_start",
-      "all_frames": true
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true
     }
   ],
   "browser_specific_settings": {
