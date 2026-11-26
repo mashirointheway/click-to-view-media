@@ -71,6 +71,7 @@
 
   let disabledHosts = [];
   let siteKey = "";
+  let storageLoaded = false;
 
   // Matches SITE_KEY in content.js: host (hostname plus port) for web pages,
   // the protocol for anything without a host such as file:// URLs.
@@ -86,14 +87,16 @@
 
   function renderSite() {
     const disabledHere = !!siteKey && disabledHosts.includes(siteKey);
-    siteToggle.disabled = !siteKey;
+    siteToggle.disabled = !siteKey || !storageLoaded;
     siteToggle.setAttribute("aria-pressed", String(disabledHere));
     siteToggle.textContent = !siteKey
       ? "Not available on this page"
       : (disabledHere ? "Enable on this site" : "Disable on this site");
-    siteHint.textContent = !siteKey
-      ? "Open a web page to use this setting."
-      : (disabledHere ? `Blur is off on ${siteKey}.` : `Blur is on for ${siteKey}.`);
+    siteHint.textContent = !storageLoaded
+      ? "Checking this page…"
+      : (!siteKey
+        ? "Open a web page to use this setting."
+        : (disabledHere ? `Blur is off on ${siteKey}.` : `Blur is on for ${siteKey}.`));
   }
 
   function getActiveTab() {
@@ -123,6 +126,7 @@
   storageGet({ blurPx: DEFAULT_BLUR_PX, disabledHosts: [] }).then(data => {
     render(data.blurPx);
     disabledHosts = Array.isArray(data.disabledHosts) ? data.disabledHosts.slice() : [];
+    storageLoaded = true;
     renderSite();
   });
 
@@ -132,7 +136,7 @@
   });
 
   siteToggle.addEventListener("click", () => {
-    if (!siteKey) return;
+    if (!siteKey || !storageLoaded) return;
     disabledHosts = disabledHosts.includes(siteKey)
       ? disabledHosts.filter(host => host !== siteKey)
       : disabledHosts.concat(siteKey);

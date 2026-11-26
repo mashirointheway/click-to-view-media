@@ -20,6 +20,7 @@ Built for Chrome and Firefox for Android Beta. Everything runs locally: no accou
 | Feature | What it does |
 |---|---|
 | **Per-item toggle** | Every image and video is independent. Revealing one never reveals the rest of the page. Click the same item again to blur it. |
+| **Reveal button on large media** | Images and video at least 150px wide and tall show a translucent **Click to view** button above the page's own overlays, so media covered by tag markers or other controls can still be revealed. |
 | **Adjustable blur** | Set blur from **18px to 100px** in the popup. The value is saved and applied to media already on the page. |
 | **Per-address off switch** | Turn blur off for the current address from the popup — YouTube muting and skipping stop there too. The choice is remembered per site; every other site stays blurred. |
 | **Broad media coverage** | `<img>`, `<video>`, `<input type="image">`, SVG `<image>`, chat emotes and emoji (including CSS-background emotes), and heuristic CSS `background-image` elements such as avatars, banners, thumbnails, and `role="img"`. |
@@ -89,13 +90,13 @@ Then, in Firefox on the phone:
 
 ## Usage
 
-- **Reveal:** click or tap a blurred image or video. Only that item is revealed.
-- **Hide:** click or tap the revealed item again. It returns to its original blur. Media inside a button or link is the exception: once revealed, the next click goes to the control so it can be used.
+- **Reveal:** click or tap a blurred image or video. Only that item is revealed. Large media also shows a translucent **Click to view** button that works even when the page puts its own controls or tag markers on top of the media.
+- **Hide:** click or tap the revealed item again. It returns to its original blur. Media inside a button or link is the exception: once revealed, the next click goes to the control so it can be used — but large media revealed with the **Click to view** button always hides again.
 - **Blur amount:** open the toolbar popup (Chrome) or the Extensions menu (Firefox Android) and move the slider. Changes apply immediately to open pages.
 - **Per-address off switch:** open the popup and choose **Disable on this site**. Blur and YouTube ad handling stop on that address immediately; choose **Enable on this site** to restore them. The exception is saved per address (host, including port).
 - **YouTube:** ad audio is muted automatically while an ad is playing, previous volume is restored when it ends, and the Skip button is clicked when available.
 
-The first click on a blurred image is always used to reveal it, even when the image is wrapped in a button or link. Once it is revealed, the next click reaches the control, so image buttons and linked thumbnails still work. A revealed image that is not part of a control hides again instead.
+The first click on a blurred image is always used to reveal it, even when the image is wrapped in a button or link. Once it is revealed, the next click reaches the control, so image buttons and linked thumbnails still work. A revealed image that is not part of a control hides again instead. Large media revealed with the **Click to view** button is the exception: clicking it again hides it, even when the page puts its own clickable overlay above the image.
 
 ---
 
@@ -153,6 +154,6 @@ YouTube ad handling is best-effort and depends on YouTube's current player marku
 
 ## Version
 
-**1.5.1** — Chrome MV3 · Firefox for Android Beta 142+ · local-only Firefox build.
+**1.6.0** — Chrome MV3 · Firefox for Android Beta 142+ · local-only Firefox build.
 
 Not affiliated with YouTube or Google.

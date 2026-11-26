@@ -5,6 +5,12 @@
   const STYLE_ID = "click-to-view-media-style";
   const REVEALED = "data-click-to-view-revealed";
   const BG_MARK = "data-click-to-view-bg";
+  const OVERLAY_ATTR = "data-click-to-view-overlay";
+
+  // Large media gets a translucent "Click to view" button on top. Pages such as
+  // Instagram posts with tagged accounts paint their own controls over the
+  // media, so a click never reaches the blurred element itself.
+  const MIN_OVERLAY_SIDE_PX = 150;
 
   // Per-address off switch. The popup writes the same list of hosts to storage.
   const SITE_KEY = location.host || location.protocol;
@@ -59,6 +65,7 @@
 
   const savedStyles = new WeakMap();
   const savedTitles = new WeakMap();
+  const revealedByOverlay = new Set();
 
   const DEFAULT_BLUR_PX = 18;
   const MIN_BLUR_PX = 18;
@@ -77,8 +84,52 @@
     }
     video[${MARK}="hidden"] { visibility: visible !important; }
     [${MARK}="hidden"]::selection { background: transparent; }
+    [${OVERLAY_ATTR}] {
+      position: absolute !important;
+      z-index: 2147483000 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      border: 1px solid rgba(255, 255, 255, .35) !important;
+      border-radius: 4px !important;
+      background: rgba(10, 12, 16, .16) !important;
+      color: #fff !important;
+      font: 600 13px/1.2 system-ui, -apple-system, "Segoe UI", sans-serif !important;
+      align-items: center !important;
+      justify-content: center !important;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
+      cursor: pointer !important;
+      pointer-events: auto !important;
+      appearance: none !important;
+      -webkit-appearance: none !important;
+      text-align: center !important;
+    }
+    [${OVERLAY_ATTR}] > span {
+      padding: 6px 12px !important;
+      border-radius: 999px !important;
+      background: rgba(0, 0, 0, .6) !important;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, .45) !important;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, .6) !important;
+      white-space: nowrap !important;
+      pointer-events: none !important;
+    }
+    [${OVERLAY_ATTR}]:focus-visible {
+      outline: 2px solid #fff !important;
+      outline-offset: -2px !important;
+    }
   `;
-  (document.documentElement || document).appendChild(style);
+  // Chrome 157+: at document_start document.documentElement is null, and
+  // appending the style to `document` then makes it the document element
+  // while the parser never creates the page's <html>/<body> — every page
+  // breaks. Wait for the parser to create the document element first.
+  function appendStyle() {
+    (document.documentElement || document).appendChild(style);
+  }
+  if (document.documentElement) {
+    appendStyle();
+  } else {
+    document.addEventListener("DOMContentLoaded", appendStyle, { once: true });
+  }
 
   function normalizeBlurPx(value) {
     const number = Number(value);
@@ -243,6 +294,8 @@
   function resetElement(el) {
     el.removeAttribute(MARK);
     el.removeAttribute(BG_MARK);
+    removeOverlay(el);
+    revealedByOverlay.delete(el);
     restoreTitle(el);
     restoreHiddenStyle(el);
   }
@@ -263,6 +316,7 @@
         root.querySelectorAll(`[${MARK}="hidden"]`).forEach(resetElement);
       }
       if (stopAdHandling) stopAdHandling();
+      removeAllOverlays();
     } else {
       scan(document);
     }
@@ -277,6 +331,7 @@
       if ((isMediaElement(el) || el.hasAttribute(BG_MARK)) && !hiddenStyleIsApplied(el)) {
         applyHiddenStyle(el);
       }
+      scheduleOverlay(el);
       return;
     }
 
@@ -296,6 +351,8 @@
       el.removeAttribute("autoplay");
       el.preload = "none";
     }
+
+    scheduleOverlay(el);
   }
 
   function scan(root, includeShadowRoots = true) {
@@ -367,6 +424,232 @@
     });
   }
 
+  // ---- Click-to-view buttons for large media --------------------------------
+  // The button lives in the page's own stacking context, over the media, so a
+  // modal or any other page layer correctly covers it. It sits above the
+  // media's siblings, which keeps it clickable when a site (Instagram posts
+  // with tagged accounts, for example) paints its own controls on top.
+  let overlaySyncFrame = 0;
+  const overlayRecords = new Map();
+  const pendingOverlayMedia = new Set();
+  const overlayContainers = new Map();
+  const overlayMediaByButton = new WeakMap();
+  const overlayResizeObserver = typeof ResizeObserver === "function"
+    ? new ResizeObserver(entries => {
+        for (const entry of entries) {
+          const record = overlayRecords.get(entry.target);
+          if (record) positionOverlay(record);
+        }
+      })
+    : null;
+
+  function isOverlayableElement(el) {
+    const tag = el.localName;
+    return tag === "img" || tag === "video" ||
+      (tag === "input" && el.type === "image") ||
+      el.hasAttribute(BG_MARK);
+  }
+
+  function overlayContainerFor(el) {
+    let container = el.parentElement;
+    while (container && container !== document.documentElement) {
+      let display = "";
+      try {
+        display = getComputedStyle(container).display;
+      } catch (_) {}
+      if (display !== "contents") break;
+      container = container.parentElement;
+    }
+    if (!container) return null;
+    // Avoid nesting the button inside a control or a <picture>, which would be
+    // invalid markup and could steal the control's own click handling.
+    if (container.localName === "picture" || container.matches(INTERACTIVE_SELECTOR)) {
+      container = container.parentElement;
+    }
+    return container && container !== document ? container : null;
+  }
+
+  function acquireOverlayContainer(container) {
+    let entry = overlayContainers.get(container);
+    if (entry) {
+      entry.count++;
+      return entry;
+    }
+    entry = { count: 1, changed: false, position: "", priority: "" };
+    let computed = null;
+    try {
+      computed = getComputedStyle(container);
+    } catch (_) {}
+    if (computed && computed.position === "static") {
+      entry.changed = true;
+      entry.position = container.style.getPropertyValue("position");
+      entry.priority = container.style.getPropertyPriority("position");
+      container.style.setProperty("position", "relative");
+    }
+    overlayContainers.set(container, entry);
+    return entry;
+  }
+
+  function releaseOverlayContainer(record) {
+    const entry = record.containerEntry;
+    const container = record.container;
+    if (!entry || !container) return;
+    entry.count--;
+    if (entry.count > 0) return;
+    overlayContainers.delete(container);
+    if (entry.changed) {
+      if (entry.position) container.style.setProperty("position", entry.position, entry.priority);
+      else container.style.removeProperty("position");
+    }
+  }
+
+  function shouldShowOverlay(el) {
+    if (disabled || !el.isConnected) return false;
+    if (el.hasAttribute(REVEALED) || el.getAttribute(MARK) !== "hidden") return false;
+    if (!isOverlayableElement(el)) return false;
+    const rect = el.getBoundingClientRect();
+    // A zero-sized rect usually means the media has not been laid out yet.
+    // Keep a button ready so it can appear as soon as the media has a size.
+    if (rect.width === 0 || rect.height === 0) return true;
+    return rect.width >= MIN_OVERLAY_SIDE_PX && rect.height >= MIN_OVERLAY_SIDE_PX;
+  }
+
+  function positionOverlay(record) {
+    const media = record.media;
+    const container = record.container;
+    const button = record.button;
+    if (!media.isConnected || !container || !container.isConnected) {
+      button.style.display = "none";
+      return;
+    }
+    const rect = media.getBoundingClientRect();
+    if (rect.width < MIN_OVERLAY_SIDE_PX || rect.height < MIN_OVERLAY_SIDE_PX) {
+      button.style.display = "none";
+      return;
+    }
+
+    let computed = null;
+    try {
+      computed = getComputedStyle(container);
+    } catch (_) {}
+    const containerRect = container.getBoundingClientRect();
+    const borderLeft = computed ? parseFloat(computed.borderLeftWidth) || 0 : 0;
+    const borderTop = computed ? parseFloat(computed.borderTopWidth) || 0 : 0;
+    // Absolutely positioned children are placed from the padding box before
+    // the container's own scroll offset.
+    const scrollLeft = container === document.documentElement ? 0 : container.scrollLeft;
+    const scrollTop = container === document.documentElement ? 0 : container.scrollTop;
+
+    button.style.display = "flex";
+    button.style.left = `${rect.left - containerRect.left - borderLeft + scrollLeft}px`;
+    button.style.top = `${rect.top - containerRect.top - borderTop + scrollTop}px`;
+    button.style.width = `${rect.width}px`;
+    button.style.height = `${rect.height}px`;
+  }
+
+  function createOverlay(media) {
+    const container = overlayContainerFor(media);
+    if (!container) return null;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute(OVERLAY_ATTR, "");
+    button.setAttribute("aria-label", "Click to view media");
+    button.title = "Click to view this media";
+
+    const label = document.createElement("span");
+    label.textContent = "Click to view";
+    label.setAttribute("aria-hidden", "true");
+    button.appendChild(label);
+
+    const record = { media, button, container };
+    record.containerEntry = acquireOverlayContainer(container);
+    overlayMediaByButton.set(button, media);
+
+    overlayRecords.set(media, record);
+    if (overlayResizeObserver) overlayResizeObserver.observe(media);
+    container.appendChild(button);
+    positionOverlay(record);
+    return record;
+  }
+
+  function removeOverlay(el) {
+    const record = overlayRecords.get(el);
+    if (!record) return;
+    overlayRecords.delete(el);
+    pendingOverlayMedia.delete(el);
+    if (overlayResizeObserver) overlayResizeObserver.unobserve(el);
+    overlayMediaByButton.delete(record.button);
+    record.button.remove();
+    releaseOverlayContainer(record);
+  }
+
+  function removeAllOverlays() {
+    for (const [media, record] of overlayRecords) {
+      if (overlayResizeObserver) overlayResizeObserver.unobserve(media);
+      record.button.remove();
+      releaseOverlayContainer(record);
+    }
+    overlayRecords.clear();
+    pendingOverlayMedia.clear();
+  }
+
+  function syncOverlay(el) {
+    if (!shouldShowOverlay(el)) {
+      removeOverlay(el);
+      return;
+    }
+    const record = overlayRecords.get(el);
+    if (!record) {
+      createOverlay(el);
+    } else if (record.button.isConnected) {
+      positionOverlay(record);
+    } else {
+      record.container.appendChild(record.button);
+      positionOverlay(record);
+    }
+  }
+
+  // Site re-renders can replace the container, remove the button, or drop the
+  // media entirely. Repair or forget the overlay on the next sync pass.
+  function repairOverlays() {
+    for (const [media, record] of overlayRecords) {
+      if (!media.isConnected) {
+        removeOverlay(media);
+        continue;
+      }
+      if (record.container && record.container.isConnected && record.container.contains(media)) {
+        if (!record.button.isConnected) {
+          record.container.appendChild(record.button);
+          positionOverlay(record);
+        }
+        continue;
+      }
+      releaseOverlayContainer(record);
+      const container = overlayContainerFor(media);
+      if (!container) {
+        removeOverlay(media);
+        continue;
+      }
+      record.container = container;
+      record.containerEntry = acquireOverlayContainer(container);
+      container.appendChild(record.button);
+      positionOverlay(record);
+    }
+  }
+
+  function scheduleOverlay(el) {
+    pendingOverlayMedia.add(el);
+    if (overlaySyncFrame) return;
+    overlaySyncFrame = requestFrame(() => {
+      overlaySyncFrame = 0;
+      const media = Array.from(pendingOverlayMedia);
+      pendingOverlayMedia.clear();
+      for (const el of media) syncOverlay(el);
+      repairOverlays();
+    });
+  }
+
   function handleRecords(records) {
     for (const record of records) {
       if (record.type === "childList") {
@@ -381,6 +664,15 @@
           } else if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
             scheduleScan(node);
           }
+        });
+        record.removedNodes.forEach(node => {
+          if (node.nodeType !== Node.ELEMENT_NODE) return;
+          revealedByOverlay.delete(node);
+          if (overlayRecords.has(node)) removeOverlay(node);
+          node.querySelectorAll(MEDIA_SELECTOR).forEach(el => {
+            revealedByOverlay.delete(el);
+            if (overlayRecords.has(el)) removeOverlay(el);
+          });
         });
       } else if (record.type === "attributes") {
         const el = record.target;
@@ -409,6 +701,9 @@
   function observeRoot(root) {
     if (!root || root.__clickToViewObserved) return;
     root.__clickToViewObserved = true;
+    for (const known of knownRoots) {
+      if (known !== document && !known.isConnected) knownRoots.delete(known);
+    }
     knownRoots.add(root);
     try {
       observer.observe(root, {
@@ -639,10 +934,13 @@
     return null;
   }
 
-  function revealElement(el) {
+  function revealElement(el, fromOverlay = false) {
+    if (fromOverlay) revealedByOverlay.add(el);
+    else revealedByOverlay.delete(el);
     el.setAttribute(REVEALED, "true");
     el.removeAttribute(MARK);
     el.removeAttribute(BG_MARK);
+    removeOverlay(el);
     restoreTitle(el);
     restoreHiddenStyle(el);
     if (el.localName === "video") {
@@ -652,6 +950,7 @@
   }
 
   function unrevealElement(el) {
+    revealedByOverlay.delete(el);
     el.removeAttribute(REVEALED);
     hide(el);
   }
@@ -670,15 +969,63 @@
     return null;
   }
 
+  // Some sites paint controls over the media (Instagram tag markers, for
+  // example), so the click lands on a sibling of the revealed image. Match the
+  // revealed media under the pointer and close to the clicked element, so a
+  // click on a modal does not reach media behind it.
+  function findRevealedAtPoint(event) {
+    if (!event.detail || !(event.target instanceof Element)) return null;
+    const target = event.target;
+
+    const nearby = new Set();
+    let ancestor = target;
+    for (let depth = 0; ancestor && depth <= 4; depth++) {
+      nearby.add(ancestor);
+      ancestor = ancestor.parentElement;
+    }
+
+    const x = event.clientX;
+    const y = event.clientY;
+    for (const el of revealedByOverlay) {
+      if (!el.isConnected) {
+        revealedByOverlay.delete(el);
+        continue;
+      }
+      const rect = el.getBoundingClientRect();
+      if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
+      for (const node of nearby) {
+        if (node.contains(el)) return { el, reveal: false };
+      }
+    }
+    return null;
+  }
+
   function handleMediaClick(event) {
     if (disabled) return;
-    const toggled = findTogglable(event.target);
+
+    // The overlay button is handled in the capture phase so the page's own
+    // listeners never see the click (tag markers, post links, and so on).
+    const overlay = event.target instanceof Element
+      ? event.target.closest(`[${OVERLAY_ATTR}]`)
+      : null;
+    if (overlay) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      const media = overlayMediaByButton.get(overlay);
+      if (media && media.isConnected) revealElement(media, true);
+      return;
+    }
+
+    const toggled = findTogglable(event.target) || findRevealedAtPoint(event);
     if (!toggled) return;
 
     // The first click on a blurred item only reveals it. After that, an item
     // that is part of a button or link hands the click to the page instead of
     // hiding itself again, otherwise the control could never be activated.
-    if (!toggled.reveal && findInteractive(event.target)) return;
+    // Media revealed with the overlay button always hides again, so the
+    // button has a matching way to undo itself.
+    if (!toggled.reveal && !revealedByOverlay.has(toggled.el) && findInteractive(event.target)) return;
 
     event.preventDefault();
     event.stopPropagation();
