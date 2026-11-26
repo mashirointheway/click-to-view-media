@@ -58,11 +58,18 @@
   }
 
   function storageSet(value) {
-    if (!storageArea) return;
+    if (!storageArea) return Promise.resolve(false);
     try {
-      if (isFirefoxApi) storageArea.set(value).catch(() => {});
-      else storageArea.set(value, () => {});
-    } catch (_) {}
+      if (isFirefoxApi) return storageArea.set(value).then(() => true, () => false);
+      return new Promise(resolve => {
+        try {
+          storageArea.set(value, () => {
+            const ok = !(extensionApi && extensionApi.runtime && extensionApi.runtime.lastError);
+            resolve(ok);
+          });
+        } catch (_) { resolve(false); }
+      });
+    } catch (_) { return Promise.resolve(false); }
   }
 
   function save(value) {
@@ -71,6 +78,7 @@
 
   let disabledHosts = [];
   let siteKey = "";
+  let storageLoaded = false;
 
   // Matches SITE_KEY in content.js: host (hostname plus port) for web pages,
   // the protocol for anything without a host such as file:// URLs.
@@ -86,14 +94,16 @@
 
   function renderSite() {
     const disabledHere = !!siteKey && disabledHosts.includes(siteKey);
-    siteToggle.disabled = !siteKey;
+    siteToggle.disabled = !siteKey || !storageLoaded;
     siteToggle.setAttribute("aria-pressed", String(disabledHere));
     siteToggle.textContent = !siteKey
       ? "Not available on this page"
       : (disabledHere ? "Enable on this site" : "Disable on this site");
-    siteHint.textContent = !siteKey
-      ? "Open a web page to use this setting."
-      : (disabledHere ? `Blur is off on ${siteKey}.` : `Blur is on for ${siteKey}.`);
+    siteHint.textContent = !storageLoaded
+      ? "Checking this page…"
+      : (!siteKey
+        ? "Open a web page to use this setting."
+        : (disabledHere ? `Blur is off on ${siteKey}.` : `Blur is on for ${siteKey}.`));
   }
 
   function getActiveTab() {
@@ -123,6 +133,7 @@
   storageGet({ blurPx: DEFAULT_BLUR_PX, disabledHosts: [] }).then(data => {
     render(data.blurPx);
     disabledHosts = Array.isArray(data.disabledHosts) ? data.disabledHosts.slice() : [];
+    storageLoaded = true;
     renderSite();
   });
 
@@ -132,12 +143,20 @@
   });
 
   siteToggle.addEventListener("click", () => {
-    if (!siteKey) return;
-    disabledHosts = disabledHosts.includes(siteKey)
+    if (!siteKey || !storageLoaded) return;
+    const next = disabledHosts.includes(siteKey)
       ? disabledHosts.filter(host => host !== siteKey)
       : disabledHosts.concat(siteKey);
-    storageSet({ disabledHosts });
+    disabledHosts = next;
     renderSite();
+    storageSet({ disabledHosts: next }).then(ok => {
+      if (ok) return;
+      // Persistence failed; re-read storage so the UI matches what's saved.
+      storageGet({ disabledHosts: [] }).then(data => {
+        disabledHosts = Array.isArray(data.disabledHosts) ? data.disabledHosts.slice() : [];
+        renderSite();
+      });
+    });
   });
 
   slider.addEventListener("input", () => {
