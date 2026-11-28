@@ -276,6 +276,45 @@
     return tag === "input" && el.type === "image";
   }
 
+  // Sites often stack media in the same spot: a placeholder under the real
+  // image, a thumbnail under a preview video, a picture under its own blurred
+  // copy. Those look like one item to the reader, so a click should reveal or
+  // hide the whole stack. Rects within this overlap count as one item.
+  const STACK_OVERLAP = 0.7;
+
+  function rectOverlapRatio(a, b) {
+    const overlapWidth = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+    const overlapHeight = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+    if (overlapWidth <= 0 || overlapHeight <= 0) return 0;
+    const overlap = overlapWidth * overlapHeight;
+    const union = a.width * a.height + b.width * b.height - overlap;
+    return union > 0 ? overlap / union : 0;
+  }
+
+  function stackMates(el) {
+    const base = el.getBoundingClientRect();
+    if (!base.width || !base.height) return [];
+
+    // Hit-testing at the media's center finds whatever is stacked on top of
+    // it, however the DOM wraps those elements.
+    const x = base.left + base.width / 2;
+    const y = base.top + base.height / 2;
+    const root = el.getRootNode ? el.getRootNode() : document;
+    const probe = root && typeof root.elementsFromPoint === "function"
+      ? root.elementsFromPoint.bind(root)
+      : document.elementsFromPoint.bind(document);
+
+    const mates = [];
+    for (const other of probe(x, y)) {
+      if (other === el || !other.hasAttribute) continue;
+      if (!other.hasAttribute(MARK) && !other.hasAttribute(REVEALED)) continue;
+      const rect = other.getBoundingClientRect();
+      if (!rect.width || !rect.height) continue;
+      if (rectOverlapRatio(base, rect) >= STACK_OVERLAP) mates.push(other);
+    }
+    return mates;
+  }
+
   // Cheap rejection before the expensive getComputedStyle + rect work.
   function bgPrecheck(el) {
     if (!el || !el.isConnected) return false;
@@ -344,6 +383,10 @@
   }
 
   function revealElement(el, fromOverlay = false) {
+    for (const item of [el, ...stackMates(el)]) revealOne(item, fromOverlay);
+  }
+
+  function revealOne(el, fromOverlay) {
     if (fromOverlay) revealedByOverlay.add(el);
     else revealedByOverlay.delete(el);
 
@@ -367,6 +410,10 @@
   }
 
   function unrevealElement(el) {
+    for (const item of [el, ...stackMates(el)]) unrevealOne(item);
+  }
+
+  function unrevealOne(el) {
     revealedByOverlay.delete(el);
     el.removeAttribute(REVEALED);
     hide(el);
@@ -603,7 +650,24 @@
       }
       return record;
     }
+    // One button per visual stack: a placeholder image and the real image on
+    // top of it should not each paint their own button.
+    if (hasOverlayMate(el)) return null;
     return createOverlay(el);
+  }
+
+  function hasOverlayMate(el) {
+    const parent = el.parentElement;
+    if (!parent) return false;
+    const rect = el.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+    for (const record of overlayRecords.values()) {
+      if (record.media.parentElement !== parent) continue;
+      const other = record.media.getBoundingClientRect();
+      if (!other.width || !other.height) continue;
+      if (rectOverlapRatio(rect, other) >= STACK_OVERLAP) return true;
+    }
+    return false;
   }
 
   // Site re-renders can replace the container, remove the button, or drop the

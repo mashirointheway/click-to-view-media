@@ -19,7 +19,7 @@ Built for Chrome and Firefox for Android Beta. Everything runs locally: no accou
 
 | Feature | What it does |
 |---|---|
-| **Per-item toggle** | Every image and video is independent. Revealing one never reveals the rest of the page. Click the same item again to blur it. |
+| **Per-item toggle** | Every image and video is independent. Revealing one never reveals the rest of the page. Click the same item again to blur it. Media stacked in the same spot — a placeholder image under the real one, a thumbnail under a preview video — counts as one item, so one click covers the whole stack and one button serves it. |
 | **Reveal button on large media** | Images and video at least 150px wide and tall show a translucent **Click to view** button above the page's own overlays, so media covered by tag markers or other controls can still be revealed. |
 | **Adjustable blur** | Set blur from **18px to 100px** in the popup. The value is saved and applied to media already on the page; if a write fails, the popup says so instead of silently dropping it. |
 | **Per-address off switch** | Turn blur off for the current address from the popup — YouTube muting and skipping stop there too. The choice is remembered per site; every other site stays blurred. It also covers iframes in that tab: each frame follows the address bar's site, so media in a cross-origin iframe of a disabled site is no longer blurred and a YouTube embed stops its ad handling. |
@@ -94,7 +94,7 @@ Then, in Firefox on the phone:
 
 ## Usage
 
-- **Reveal:** click or tap a blurred image or video. Only that item is revealed. Large media also shows a translucent **Click to view** button that works even when the page puts its own controls or tag markers on top of the media.
+- **Reveal:** click or tap a blurred image or video. Only that item is revealed. Several media elements stacked in the same spot reveal and hide together, so a placeholder under the real picture does not need a second click. Large media also shows a translucent **Click to view** button that works even when the page puts its own controls or tag markers on top of the media.
 - **Hide:** click or tap the revealed item again. It returns to its original blur. Media inside a button or link is the exception: once revealed, the next click goes to the control so it can be used — but large media revealed with the **Click to view** button always hides again.
 - **Blur amount:** open the toolbar popup (Chrome) or the Extensions menu (Firefox Android) and move the slider. Changes apply immediately to open pages.
 - **Per-address off switch:** open the popup and turn off **Blur on this site**. Blur and YouTube ad handling stop on that address immediately; turn it back on to restore them. The exception is saved per address (host, including port) and also applies inside iframes of that tab: a frame follows the address bar's site, so media in a cross-origin iframe of a disabled site is no longer blurred and a YouTube embed stops its ad handling too.
