@@ -20,6 +20,7 @@ Built for Chrome and Firefox for Android Beta. Everything runs locally: no accou
 | Feature | What it does |
 |---|---|
 | **Per-item toggle** | Every image and video is independent. Revealing one never reveals the rest of the page. Click the same item again to blur it. Media stacked in the same spot — a placeholder image under the real one, a thumbnail under a preview video — counts as one item, so one click covers the whole stack and one button serves it. |
+| **Playback untouched** | Hiding or revealing a video only changes its blur. The extension never pauses, starts, mutes, or unmutes it. |
 | **Reveal button on large media** | Images and video at least 150px wide and tall show a translucent **Click to view** button above the page's own overlays, so media covered by tag markers or other controls can still be revealed. |
 | **Adjustable blur** | Set blur from **18px to 100px** in the popup. The value is saved and applied to media already on the page; if a write fails, the popup says so instead of silently dropping it. |
 | **Per-address off switch** | Turn blur off for the current address from the popup — YouTube muting and skipping stop there too. The choice is remembered per site; every other site stays blurred. It also covers iframes in that tab: each frame follows the address bar's site, so media in a cross-origin iframe of a disabled site is no longer blurred and a YouTube embed stops its ad handling. |
@@ -161,7 +162,7 @@ YouTube ad handling is best-effort and depends on YouTube's current player marku
 
 - CSS `background-image` detection is heuristic. Complex compositions, canvas-rendered media, and closed shadow roots may not be covered.
 - Sites that aggressively re-render media may need a refresh before the blur applies.
-- Clicking a revealed video toggles it back to blurred; native video controls are affected by the same click.
+- A click on a revealed video re-blurs it instead of reaching the player's controls. Use the page's own play/pause button, or the keyboard, when a site only exposes playback there.
 - Mobile YouTube player markup changes more often than desktop, so ad skipping is less reliable there.
 - The Firefox Android install is temporary by design (see above).
 

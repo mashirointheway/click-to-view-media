@@ -3,7 +3,7 @@
 //
 // Layout of this file:
 //   1. styles and constants
-//   2. per-element state (saved styles, title, video props)
+//   2. per-element state (saved styles and title)
 //   3. hide / reveal / reset
 //   4. overlays
 //   5. mutation handling and the batched flush
@@ -194,7 +194,7 @@
 
   // ---- 2. per-element state ------------------------------------------------
 
-  // el -> { title, styles: { prop: [value, priority] }, video: {...} }
+  // el -> { title, styles: { prop: [value, priority] } }
   const hiddenState = new WeakMap();
   const revealedByOverlay = new Set();
 
@@ -207,14 +207,7 @@
       styles[prop] = [el.style.getPropertyValue(prop), el.style.getPropertyPriority(prop)];
     }
 
-    state = { title: el.getAttribute("title"), styles, video: null };
-    if (el.localName === "video") {
-      state.video = {
-        autoplay: el.getAttribute("autoplay"),
-        preload: el.getAttribute("preload"),
-        controls: el.controls
-      };
-    }
+    state = { title: el.getAttribute("title"), styles };
     hiddenState.set(el, state);
     return state;
   }
@@ -250,22 +243,6 @@
     if (el.getAttribute("title") !== HIDDEN_TITLE) return;
     if (state.title === null) el.removeAttribute("title");
     else el.setAttribute("title", state.title);
-  }
-
-  function freezeVideo(el) {
-    try { el.pause(); } catch (_) {}
-    el.autoplay = false;
-    el.removeAttribute("autoplay");
-    el.preload = "none";
-  }
-
-  function restoreVideo(el, state) {
-    if (!state.video) return;
-    el.controls = state.video.controls;
-    if (state.video.preload === null) el.removeAttribute("preload");
-    else el.setAttribute("preload", state.video.preload);
-    if (state.video.autoplay === null) el.removeAttribute("autoplay");
-    else el.setAttribute("autoplay", state.video.autoplay);
   }
 
   // ---- 3. hide / reveal / reset --------------------------------------------
@@ -364,7 +341,6 @@
     el.setAttribute(MARK, "hidden");
     el.setAttribute("title", HIDDEN_TITLE);
     setHiddenStyle(el);
-    if (el.localName === "video") freezeVideo(el);
     watchOverlay(el);
   }
 
@@ -378,7 +354,6 @@
     if (!state) return;
     restoreTitle(el, state);
     restoreHiddenStyle(el, state);
-    restoreVideo(el, state);
     hiddenState.delete(el);
   }
 
@@ -401,11 +376,6 @@
       restoreTitle(el, state);
       restoreHiddenStyle(el, state);
       hiddenState.delete(el);
-    }
-
-    if (el.localName === "video") {
-      el.controls = true;
-      el.preload = "metadata";
     }
   }
 
